@@ -1,4 +1,4 @@
-NEV = "Midpoint Kör"
+NEV = "Midpoint Kör (nem tökéletes)"
 TIPUS = "2D"
 
 
