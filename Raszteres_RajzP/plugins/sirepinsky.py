@@ -40,3 +40,5 @@ def futtat(grid_w, grid_h, p1, p2):
 
         if 0 <= curr_x < grid_w and 0 <= curr_y < grid_h:
             yield curr_x, curr_y, (255, 255, 255)  # Fehér pontok
+
+            #tesztelve

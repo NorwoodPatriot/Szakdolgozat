@@ -31,3 +31,5 @@ def futtat(grid_w, grid_h, p1, p2):
 
         if 0 <= int(x) < grid_w and 0 <= int(y) < grid_h:
             yield int(x), int(y), (0, 255, 255)  # Ciánkék
+
+            #tesztelve

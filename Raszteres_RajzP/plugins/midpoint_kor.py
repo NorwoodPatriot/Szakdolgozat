@@ -32,3 +32,5 @@ def futtat(grid_w, grid_h, p1, p2):
         else:
             x -= 1
             err += 2 * (y - x) + 1
+
+#tesztelve
