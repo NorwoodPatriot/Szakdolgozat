@@ -1,22 +1,32 @@
 import sys
 import os
+import json
 import importlib.util
 from PyQt6 import QtWidgets, QtCore, QtGui
 
 
 class Canvas(QtWidgets.QWidget):
     point_selected = QtCore.pyqtSignal(int, int, str)
-    mouse_moved = QtCore.pyqtSignal(int, int)  # Élő koordináta jelzés
+    mouse_moved = QtCore.pyqtSignal(int, int)
 
     def __init__(self):
         super().__init__()
         self.grid_size = (50, 50)
         self.pixels = {}
         self.setMinimumSize(500, 500)
+
+        # Kattintás állapotok
         self.next_click_is_start = True
         self.marker_start = None
         self.marker_end = None
-        self.setMouseTracking(True)  # Bekapcsoljuk az egérkövetést
+        self.setMouseTracking(True)
+
+        # --- ÚJ: KAMERA ÉS PÁSZTÁZÁS ---
+        self.zoom = 15.0  # Kezdeti cellaméret (15 pixel)
+        self.camera_x = 0.0  # Kamera X eltolása
+        self.camera_y = 0.0  # Kamera Y eltolása
+        self.is_panning = False  # Épp húzzuk-e a vásznat?
+        self.last_mouse_pos = None
 
     def set_grid_resolution(self, cols, rows):
         self.grid_size = (cols, rows)
@@ -27,6 +37,11 @@ class Canvas(QtWidgets.QWidget):
         self.marker_start = None
         self.marker_end = None
         self.next_click_is_start = True
+
+        # Kamera középre állítása törléskor
+        cols, rows = self.grid_size
+        self.camera_x = ((cols * self.zoom) - self.width()) / 2
+        self.camera_y = ((rows * self.zoom) - self.height()) / 2
         self.update()
 
     def put_pixel(self, x, y, color):
@@ -34,97 +49,161 @@ class Canvas(QtWidgets.QWidget):
             self.pixels[(int(x), int(y))] = color
             self.update()
 
-    def mouseMoveEvent(self, event):
-        """Folyamatosan küldi a logikai rácskoordinátákat, ahogy mozog az egér."""
-        cols, rows = self.grid_size
-        cell_size = min(self.width() / cols, self.height() / rows)
-        offset_x = (self.width() - (cols * cell_size)) / 2
-        offset_y = (self.height() - (rows * cell_size)) / 2
+    # --- KOORDINÁTA KONVERTEREK ---
+    def screen_to_grid(self, sx, sy):
+        """Képernyő pixel -> Logikai rács koordináta"""
+        lx = int((sx + self.camera_x) / self.zoom)
+        ly = int((sy + self.camera_y) / self.zoom)
+        return lx, ly
 
-        real_x = event.position().x() - offset_x
-        real_y = event.position().y() - offset_y
+    def grid_to_screen(self, lx, ly):
+        """Logikai rács koordináta -> Képernyő pixel"""
+        sx = (lx * self.zoom) - self.camera_x
+        sy = (ly * self.zoom) - self.camera_y
+        return sx, sy
 
-        # Ha a rácson kívül van az egér, negatív értékeket küldünk
-        if real_x < 0 or real_y < 0 or real_x >= (cols * cell_size) or real_y >= (rows * cell_size):
-            self.mouse_moved.emit(-1, -1)
-            return
+    # --- EGÉR ESEMÉNYEK (Nagyítás és Mozgás) ---
+    def wheelEvent(self, event):
+        """Egérgörgő a Zoomoláshoz (Kurzorhoz fókuszálva)"""
+        old_zoom = self.zoom
+        # Zoom mértéke (+10% vagy -10%)
+        if event.angleDelta().y() > 0:
+            self.zoom = min(100.0, self.zoom * 1.1)
+        else:
+            self.zoom = max(2.0, self.zoom / 1.1)
 
-        lx = int(real_x / cell_size)
-        ly = int(real_y / cell_size)
-        self.mouse_moved.emit(lx, ly)
+        # Hogy a kurzor alatt maradjon a rács (okos zoom)
+        mouse_x = event.position().x()
+        mouse_y = event.position().y()
+        self.camera_x = (mouse_x + self.camera_x) * (self.zoom / old_zoom) - mouse_x
+        self.camera_y = (mouse_y + self.camera_y) * (self.zoom / old_zoom) - mouse_y
+
+        self.update()
 
     def mousePressEvent(self, event):
-        cols, rows = self.grid_size
+        if event.button() == QtCore.Qt.MouseButton.RightButton or event.button() == QtCore.Qt.MouseButton.MiddleButton:
+            # Jobb klikk vagy Görögő gomb: Pásztázás kezdete
+            self.is_panning = True
+            self.last_mouse_pos = event.position()
+            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
 
-        cell_size = min(self.width() / cols, self.height() / rows)
-        offset_x = (self.width() - (cols * cell_size)) / 2
-        offset_y = (self.height() - (rows * cell_size)) / 2
+        elif event.button() == QtCore.Qt.MouseButton.LeftButton:
+            # Bal klikk: Rajzolás/Pont lerakása
+            cols, rows = self.grid_size
+            lx, ly = self.screen_to_grid(event.position().x(), event.position().y())
 
-        real_x = event.position().x() - offset_x
-        real_y = event.position().y() - offset_y
+            if 0 <= lx < cols and 0 <= ly < rows:
+                tipus = "start" if self.next_click_is_start else "end"
+                self.point_selected.emit(lx, ly, tipus)
+                if self.next_click_is_start:
+                    self.marker_start = (lx, ly)
+                else:
+                    self.marker_end = (lx, ly)
+                self.next_click_is_start = not self.next_click_is_start
+                self.update()
 
-        if real_x < 0 or real_y < 0 or real_x >= (cols * cell_size) or real_y >= (rows * cell_size):
-            return
-
-        lx = int(real_x / cell_size)
-        ly = int(real_y / cell_size)
-
-        if 0 <= lx < self.grid_size[0] and 0 <= ly < self.grid_size[1]:
-            tipus = "start" if self.next_click_is_start else "end"
-            self.point_selected.emit(lx, ly, tipus)
-            if self.next_click_is_start:
-                self.marker_start = (lx, ly)
-            else:
-                self.marker_end = (lx, ly)
-            self.next_click_is_start = not self.next_click_is_start
+    def mouseMoveEvent(self, event):
+        if self.is_panning:
+            # Kamera mozgatása
+            delta = event.position() - self.last_mouse_pos
+            self.camera_x -= delta.x()
+            self.camera_y -= delta.y()
+            self.last_mouse_pos = event.position()
             self.update()
+        else:
+            # Élő koordináta frissítése mozgáskor
+            cols, rows = self.grid_size
+            lx, ly = self.screen_to_grid(event.position().x(), event.position().y())
+            if 0 <= lx < cols and 0 <= ly < rows:
+                self.mouse_moved.emit(lx, ly)
+            else:
+                self.mouse_moved.emit(-1, -1)
 
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.RightButton or event.button() == QtCore.Qt.MouseButton.MiddleButton:
+            self.is_panning = False
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+
+    # --- RAJZOLÁS ÉS MINIMAP ---
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         cols, rows = self.grid_size
 
-        # 1. Sötét munkaterület
-        painter.fillRect(event.rect(), QtGui.QColor(45, 45, 45))
+        # 1. Háttér sötétre festése (munkaterület)
+        painter.fillRect(event.rect(), QtGui.QColor(40, 40, 40))
 
-        # 2. Középre igazítás és cellaméret számítás
-        cell_size = min(self.width() / cols, self.height() / rows)
-        offset_x = (self.width() - (cols * cell_size)) / 2
-        offset_y = (self.height() - (rows * cell_size)) / 2
+        # 2. Fehér "Papírlap" megrajzolása a kamerához igazítva
+        papir_x, papir_y = self.grid_to_screen(0, 0)
+        papir_w = cols * self.zoom
+        papir_h = rows * self.zoom
+        painter.fillRect(QtCore.QRectF(papir_x, papir_y, papir_w, papir_h), QtGui.QColor(255, 255, 255))
 
-        # 3. Fehér rajzlap
-        painter.fillRect(QtCore.QRectF(offset_x, offset_y, cols * cell_size, rows * cell_size),
-                         QtGui.QColor(255, 255, 255))
-
-        # 4. Rácsok
+        # 3. Rácsok megrajzolása (Kizárólag azokat rajzoljuk, amik a papíron vannak)
         painter.setPen(QtGui.QColor(220, 220, 220))
         for i in range(cols + 1):
-            x = offset_x + (i * cell_size)
-            painter.drawLine(QtCore.QPointF(x, offset_y), QtCore.QPointF(x, offset_y + (rows * cell_size)))
+            x = papir_x + (i * self.zoom)
+            painter.drawLine(QtCore.QPointF(x, papir_y), QtCore.QPointF(x, papir_y + papir_h))
         for j in range(rows + 1):
-            y = offset_y + (j * cell_size)
-            painter.drawLine(QtCore.QPointF(offset_x, y), QtCore.QPointF(offset_x + (cols * cell_size), y))
+            y = papir_y + (j * self.zoom)
+            painter.drawLine(QtCore.QPointF(papir_x, y), QtCore.QPointF(papir_x + papir_w, y))
 
-        # 5. Rajzadatok
+        # 4. Kiszámolt pixelek
         for (lx, ly), color in self.pixels.items():
+            sx, sy = self.grid_to_screen(lx, ly)
             painter.setBrush(QtGui.QBrush(color))
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.drawRect(
-                QtCore.QRectF(offset_x + (lx * cell_size), offset_y + (ly * cell_size), cell_size, cell_size))
+            painter.drawRect(QtCore.QRectF(sx, sy, self.zoom, self.zoom))
 
-        # 6. UI Jelölők
+        # 5. UI Jelölők (Sárga és Narancs pöttyök)
         if self.marker_start:
+            sx, sy = self.grid_to_screen(self.marker_start[0], self.marker_start[1])
             painter.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 0, 150)))
-            painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.drawRect(QtCore.QRectF(offset_x + (self.marker_start[0] * cell_size),
-                                           offset_y + (self.marker_start[1] * cell_size), cell_size, cell_size))
+            painter.drawRect(QtCore.QRectF(sx, sy, self.zoom, self.zoom))
 
         if self.marker_end:
+            sx, sy = self.grid_to_screen(self.marker_end[0], self.marker_end[1])
             painter.setBrush(QtGui.QBrush(QtGui.QColor(255, 165, 0, 150)))
-            painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.drawRect(
-                QtCore.QRectF(offset_x + (self.marker_end[0] * cell_size), offset_y + (self.marker_end[1] * cell_size),
-                              cell_size, cell_size))
+            painter.drawRect(QtCore.QRectF(sx, sy, self.zoom, self.zoom))
 
+        # ==========================================
+        # 6. MINIMAP (Pásztázó ablak) RAJZOLÁSA
+        # ==========================================
+        mm_size = 150  # Minimap mérete pixelben
+        mm_margin = 20  # Margó a képernyő szélétől
+        mm_x = self.width() - mm_size - mm_margin
+        mm_y = mm_margin
+
+        # Minimap háttere
+        painter.fillRect(QtCore.QRectF(mm_x, mm_y, mm_size, mm_size), QtGui.QColor(30, 30, 30, 200))
+        painter.setPen(QtGui.QPen(QtGui.QColor(100, 100, 100), 1))
+        painter.drawRect(QtCore.QRectF(mm_x, mm_y, mm_size, mm_size))
+
+        # Skálázás kiszámítása a minimaphoz
+        mm_scale = min(mm_size / cols, mm_size / rows)
+        mm_w = cols * mm_scale
+        mm_h = rows * mm_scale
+        mm_offset_x = mm_x + (mm_size - mm_w) / 2
+        mm_offset_y = mm_y + (mm_size - mm_h) / 2
+
+        # A "papír" a minimapon
+        painter.fillRect(QtCore.QRectF(mm_offset_x, mm_offset_y, mm_w, mm_h), QtGui.QColor(255, 255, 255, 150))
+
+        # Pixelek a minimapon (nagyon piciben)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        for (lx, ly), color in self.pixels.items():
+            painter.setBrush(QtGui.QBrush(color))
+            painter.drawRect(
+                QtCore.QRectF(mm_offset_x + (lx * mm_scale), mm_offset_y + (ly * mm_scale), mm_scale, mm_scale))
+
+        # KÉPERNYŐ (KAMERA) KERETE A MINIMAPON (Piros keret)
+        vx = mm_offset_x + (self.camera_x / self.zoom) * mm_scale
+        vy = mm_offset_y + (self.camera_y / self.zoom) * mm_scale
+        vw = (self.width() / self.zoom) * mm_scale
+        vh = (self.height() / self.zoom) * mm_scale
+
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 50, 50), 2))
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawRect(QtCore.QRectF(vx, vy, vw, vh))
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
