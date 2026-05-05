@@ -330,27 +330,48 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 4. DOBOZ: Műveletek (Súgókkal és Gyorsgombokkal)
         group_actions = QtWidgets.QGroupBox("4. Műveletek")
-        layout_actions = QtWidgets.QVBoxLayout()
 
+        # --- ÚJ: QGridLayout a táblázatos (2 oszlopos) elrendezéshez ---
+        layout_actions = QtWidgets.QGridLayout()
+        layout_actions.setSpacing(5)  # Egy kis térköz a gombok közé
+
+        # --- ELSŐ SOR ---
         self.btn_run = QtWidgets.QPushButton("Futtatás / Rajzolás")
         self.btn_run.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
         self.btn_run.setToolTip("Elindítja az algoritmus futtatását. (Gyorsgomb: Enter)")
         self.btn_run.setShortcut("Return")
         self.btn_run.clicked.connect(self.start_algorithm)
-        layout_actions.addWidget(self.btn_run)
+        layout_actions.addWidget(self.btn_run, 0, 0)  # Sor 0, Oszlop 0
 
         self.btn_clear = QtWidgets.QPushButton("Vászon ürítése")
+        self.btn_clear.setStyleSheet("padding: 8px;")  # Hogy ugyanolyan magas legyen, mint a futtatás
         self.btn_clear.setToolTip("Letörli a rajzokat és nullázza a kattintásokat. (Gyorsgomb: Delete)")
         self.btn_clear.setShortcut("Delete")
         self.btn_clear.clicked.connect(self.clear_canvas)
-        layout_actions.addWidget(self.btn_clear)
+        layout_actions.addWidget(self.btn_clear, 0, 1)  # Sor 0, Oszlop 1
 
+        # --- MÁSODIK SOR ---
+        self.btn_save_proj = QtWidgets.QPushButton("Projekt mentése")
+        self.btn_save_proj.setStyleSheet("background-color: #9C27B0; color: white; padding: 8px;")
+        self.btn_save_proj.setToolTip("Elmenti a teljes rácsot, beállításokat és pixeleket.")
+        self.btn_save_proj.clicked.connect(self.save_project)
+        layout_actions.addWidget(self.btn_save_proj, 1, 0)  # Sor 1, Oszlop 0
+
+        self.btn_load_proj = QtWidgets.QPushButton("Projekt betöltése")
+        self.btn_load_proj.setStyleSheet("background-color: #673AB7; color: white; padding: 8px;")
+        self.btn_load_proj.setToolTip("Betölt egy korábban elmentett munkát.")
+        self.btn_load_proj.clicked.connect(self.load_project)
+        layout_actions.addWidget(self.btn_load_proj, 1, 1)  # Sor 1, Oszlop 1
+
+        # --- HARMADIK SOR ---
+        # A Kép mentése gombot középre, alulra tesszük, úgy hogy átíveljen mindkét oszlopon
         self.btn_save = QtWidgets.QPushButton("Kép mentése (PNG)")
-        self.btn_save.setStyleSheet("background-color: #2196F3; color: white; padding: 5px;")
+        self.btn_save.setStyleSheet("background-color: #2196F3; color: white; padding: 6px;")
         self.btn_save.setToolTip("Kimenti az aktuális rajzot egy képfájlba. (Gyorsgomb: Ctrl+S)")
         self.btn_save.setShortcut("Ctrl+S")
         self.btn_save.clicked.connect(self.save_image)
-        layout_actions.addWidget(self.btn_save)
+        # Érdekesség: A 2, 0, 1, 2 jelentése: 2. sor, 0. oszlop, de 1 sor magas és 2 oszlop széles legyen!
+        layout_actions.addWidget(self.btn_save, 2, 0, 1, 2)
 
         group_actions.setLayout(layout_actions)
         sidebar.addWidget(group_actions)
@@ -403,6 +424,82 @@ class MainWindow(QtWidgets.QMainWindow):
                                                         "PNG Kép (*.png);;Minden fájl (*)")
         if path:
             pixmap.save(path)
+
+    def save_project(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Projekt mentése", "projekt.json", "JSON Fájl (*.json)")
+        if not path:
+            return
+
+        # 1. Pixelek átalakítása (Szerializáció)
+        # A Python dictionary-t (tuple kulcsokkal) nem érti a JSON, ezért átalakítjuk listává
+        pixels_data = []
+        for (x, y), color in self.canvas.pixels.items():
+            pixels_data.append({
+                "x": x,
+                "y": y,
+                "color": color.name()  # Hexadecimális kód, pl. #FF0000
+            })
+
+        # 2. A teljes állapot (State) becsomagolása
+        project_data = {
+            "grid_x": self.res_x.value(),
+            "grid_y": self.res_y.value(),
+            "start_x": self.startX.value(),
+            "start_y": self.startY.value(),
+            "end_x": self.endX.value(),
+            "end_y": self.endY.value(),
+            "algorithm": self.algo_combo.currentText(),  # Mentjük a plugin nevét is!
+            "pixels": pixels_data
+        }
+
+        # 3. Kiírás fájlba
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(project_data, f, indent=4, ensure_ascii=False)
+            QtWidgets.QMessageBox.information(self, "Siker", "Projekt sikeresen elmentve!")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Hiba", f"Nem sikerült menteni:\n{e}")
+
+    def load_project(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Projekt betöltése", "", "JSON Fájl (*.json)")
+        if not path:
+            return
+
+        try:
+            # 1. JSON beolvasása (Deszerializáció)
+            with open(path, 'r', encoding='utf-8') as f:
+                project_data = json.load(f)
+
+            # 2. UI elemek értékének visszaállítása
+            self.res_x.setValue(project_data.get("grid_x", 50))
+            self.res_y.setValue(project_data.get("grid_y", 50))
+            self.startX.setValue(project_data.get("start_x", 0))
+            self.startY.setValue(project_data.get("start_y", 0))
+            self.endX.setValue(project_data.get("end_x", 0))
+            self.endY.setValue(project_data.get("end_y", 0))
+
+            # Algoritmus (Plugin) kiválasztása a legördülőből
+            algo_name = project_data.get("algorithm", "")
+            index = self.algo_combo.findText(algo_name)
+            if index >= 0:
+                self.algo_combo.setCurrentIndex(index)
+
+            # 3. Rács és Vászon (Canvas) felépítése az új mérettel
+            self.canvas.set_grid_resolution(self.res_x.value(), self.res_y.value())
+
+            # 4. Pixelek visszatöltése
+            loaded_pixels = {}
+            for p in project_data.get("pixels", []):
+                # Visszaalakítjuk a HEX stringet QColor objektummá és a tuple kulcsot
+                loaded_pixels[(p["x"], p["y"])] = QtGui.QColor(p["color"])
+
+            self.canvas.pixels = loaded_pixels
+            self.canvas.update()
+
+            QtWidgets.QMessageBox.information(self, "Siker", "Projekt sikeresen betöltve!")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Hiba", f"Nem sikerült betölteni a fájlt:\n{e}")
+
 
     def update_coords(self, x, y, tipus):
         if tipus == "start":
