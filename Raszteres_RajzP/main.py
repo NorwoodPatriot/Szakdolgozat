@@ -32,6 +32,13 @@ class Canvas(QtWidgets.QWidget):
         self.grid_size = (cols, rows)
         self.clear_canvas()
 
+    def reset_camera(self):
+        self.zoom = 15.0  # Visszaállítjuk az eredeti cellaméretet
+        cols, rows = self.grid_size
+        self.camera_x = ((cols * self.zoom) - self.width()) / 2
+        self.camera_y = ((rows * self.zoom) - self.height()) / 2
+        self.update()
+
     def clear_canvas(self):
         self.pixels = {}
         self.marker_start = None
@@ -173,9 +180,12 @@ class Canvas(QtWidgets.QWidget):
         mm_x = self.width() - mm_size - mm_margin
         mm_y = mm_margin
 
-        # Minimap háttere
-        painter.fillRect(QtCore.QRectF(mm_x, mm_y, mm_size, mm_size), QtGui.QColor(30, 30, 30, 200))
-        painter.setPen(QtGui.QPen(QtGui.QColor(100, 100, 100), 1))
+        # --- MÓDOSÍTOTT RÉSZ (Átlátszóság beállítása) ---
+        # 1. Minimap háttere: a 200-as értéket levesszük 100-ra (sokkal átlátszóbb lesz)
+        painter.fillRect(QtCore.QRectF(mm_x, mm_y, mm_size, mm_size), QtGui.QColor(30, 30, 30, 100))
+
+        # A keretnek is adhatunk egy kis átlátszóságot (150)
+        painter.setPen(QtGui.QPen(QtGui.QColor(100, 100, 100, 150), 1))
         painter.drawRect(QtCore.QRectF(mm_x, mm_y, mm_size, mm_size))
 
         # Skálázás kiszámítása a minimaphoz
@@ -185,10 +195,11 @@ class Canvas(QtWidgets.QWidget):
         mm_offset_x = mm_x + (mm_size - mm_w) / 2
         mm_offset_y = mm_y + (mm_size - mm_h) / 2
 
-        # A "papír" a minimapon
-        painter.fillRect(QtCore.QRectF(mm_offset_x, mm_offset_y, mm_w, mm_h), QtGui.QColor(255, 255, 255, 150))
+        # 2. A "papír" a minimapon: a 150-es értéket levesszük 60-ra, hogy alig zavarjon
+        painter.fillRect(QtCore.QRectF(mm_offset_x, mm_offset_y, mm_w, mm_h), QtGui.QColor(255, 255, 255, 60))
+        # -------------------------------------------------
 
-        # Pixelek a minimapon (nagyon piciben)
+        # Pixelek a minimapon (ez maradhat tömör, hogy jól lásd a rajzot)
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         for (lx, ly), color in self.pixels.items():
             painter.setBrush(QtGui.QBrush(color))
@@ -209,6 +220,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Raszteres Rajzoló Program")
+
+        self.resize(1184, 750)
+
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.next_step)
         self.current_generator = None
@@ -366,12 +380,18 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- HARMADIK SOR ---
         # A Kép mentése gombot középre, alulra tesszük, úgy hogy átíveljen mindkét oszlopon
         self.btn_save = QtWidgets.QPushButton("Kép mentése (PNG)")
-        self.btn_save.setStyleSheet("background-color: #2196F3; color: white; padding: 6px;")
+        self.btn_save.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
         self.btn_save.setToolTip("Kimenti az aktuális rajzot egy képfájlba. (Gyorsgomb: Ctrl+S)")
         self.btn_save.setShortcut("Ctrl+S")
         self.btn_save.clicked.connect(self.save_image)
-        # Érdekesség: A 2, 0, 1, 2 jelentése: 2. sor, 0. oszlop, de 1 sor magas és 2 oszlop széles legyen!
-        layout_actions.addWidget(self.btn_save, 2, 0, 1, 2)
+        layout_actions.addWidget(self.btn_save, 2, 0)  # Sor 2, Oszlop 0
+
+        # --- ÚJ: Kamera visszaállító gomb ---
+        self.btn_reset_cam = QtWidgets.QPushButton("Kamera alaphelyzetbe")
+        self.btn_reset_cam.setStyleSheet("background-color: #607D8B; color: white; padding: 8px;")
+        self.btn_reset_cam.setToolTip("Visszaállítja a rácsot középre, alapértelmezett nagyítással.")
+        self.btn_reset_cam.clicked.connect(self.reset_camera)
+        layout_actions.addWidget(self.btn_reset_cam, 2, 1)
 
         group_actions.setLayout(layout_actions)
         sidebar.addWidget(group_actions)
@@ -379,9 +399,25 @@ class MainWindow(QtWidgets.QMainWindow):
         sidebar.addStretch()
 
         # Élő koordináta kijelző
+        # Élő koordináta és 3D Forgatás kijelző
+        status_layout = QtWidgets.QHBoxLayout()
+
         self.status_label = QtWidgets.QLabel("Egér pozíció: -")
         self.status_label.setStyleSheet("color: gray; font-style: italic;")
-        sidebar.addWidget(self.status_label)
+
+        # --- ÚJ: Lefoglalunk 150 pixel fix helyet a pozíciónak ---
+        self.status_label.setMinimumWidth(150)
+        status_layout.addWidget(self.status_label)
+
+        self.rotation_label = QtWidgets.QLabel("")
+        self.rotation_label.setStyleSheet("color: #E91E63; font-weight: bold;")
+
+        # --- ÚJ: Lefoglalunk 250 pixel fix helyet a forgatás szövegének ---
+        self.rotation_label.setMinimumWidth(250)
+        status_layout.addWidget(self.rotation_label)
+
+        status_layout.addStretch()  # Balra igazítja a szövegeket
+        sidebar.addLayout(status_layout)
 
         layout.addLayout(sidebar, 1)
 
@@ -394,9 +430,29 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_live_coords(self, x, y):
         if x == -1 and y == -1:
             self.status_label.setText("Egér pozíció: (Kívül)")
+            self.rotation_label.setText("")  # Ha kimegy az egér, eltüntetjük
         else:
             self.status_label.setText(f"Egér pozíció: X: {x}, Y: {y}")
 
+            # --- ÚJ: 3D FORGATÁS ELŐNÉZETE ---
+            # Megnézzük, hogy 3D módban vagyunk-e, és leraktuk-e már az ELSŐ kattintást
+            if self.radio_3d.isChecked() and not self.canvas.next_click_is_start:
+
+                # Kiszámoljuk a távolságot a kezdőpont (1. kattintás) és az egér (2. kattintás helye) között
+                dx = x - self.startX.value()
+                dy = y - self.startY.value()
+
+                # --- MATEMATIKA ---
+                # Itt tudod beállítani, hogy 1 rács elmozdulás hány fokot jelentsen!
+                # Általában az egeret vízszintesen húzva (dx) az Y tengely körül (ay) forgatunk, és fordítva.
+                szorzo = 5  # Pl.: 1 rács = 5 fok forgatás
+
+                fok_x = dy * szorzo
+                fok_y = dx * szorzo
+
+                self.rotation_label.setText(f"  |  Várható forgatás: X: {fok_x}°, Y: {fok_y}°")
+            else:
+                self.rotation_label.setText("")  # Ha 2D-ben vagyunk, vagy nincs 1. kattintás, elrejtjük
     def reset_coords(self):
         self.startX.setValue(0);
         self.startY.setValue(0)
@@ -424,6 +480,9 @@ class MainWindow(QtWidgets.QMainWindow):
                                                         "PNG Kép (*.png);;Minden fájl (*)")
         if path:
             pixmap.save(path)
+
+    def reset_camera(self):
+        self.canvas.reset_camera()
 
     def save_project(self):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Projekt mentése", "projekt.json", "JSON Fájl (*.json)")
