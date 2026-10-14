@@ -21,7 +21,7 @@ class Canvas(QtWidgets.QWidget):
         self.marker_end = None
         self.setMouseTracking(True)
 
-        # --- ÚJ: KAMERA ÉS PÁSZTÁZÁS ---
+        # --- KAMERA ÉS PÁSZTÁZÁS ---
         self.zoom = 15.0  # Kezdeti cellaméret (15 pixel)
         self.camera_x = 0.0  # Kamera X eltolása
         self.camera_y = 0.0  # Kamera Y eltolása
@@ -33,10 +33,21 @@ class Canvas(QtWidgets.QWidget):
         self.clear_canvas()
 
     def reset_camera(self):
-        self.zoom = 15.0  # Visszaállítjuk az eredeti cellaméretet
+        """Kiszámolja a tökéletes zoomot, hogy a rács pont kitöltse a képernyőt."""
         cols, rows = self.grid_size
+
+        # 1. Kiszámoljuk, mekkora lehet a maximális zoom vízszintesen és függőlegesen
+        # *1 hogy ne legyen margó
+        zoom_x = (self.width() * 1) / cols
+        zoom_y = (self.height() * 1) / rows
+
+        # 2. A kisebbik értéket választjuk, hogy minden irányban beférjen
+        self.zoom = min(zoom_x, zoom_y)
+
+        # 3. A kamerát középre igazítjuk az új zoom alapján
         self.camera_x = ((cols * self.zoom) - self.width()) / 2
         self.camera_y = ((rows * self.zoom) - self.height()) / 2
+
         self.update()
 
     def clear_canvas(self):
@@ -73,7 +84,7 @@ class Canvas(QtWidgets.QWidget):
     def wheelEvent(self, event):
         """Egérgörgő a Zoomoláshoz (Kurzorhoz fókuszálva)"""
         old_zoom = self.zoom
-        # Zoom mértéke (+10% vagy -10%)
+
         if event.angleDelta().y() > 0:
             self.zoom = min(100.0, self.zoom * 1.1)
         else:
@@ -180,8 +191,8 @@ class Canvas(QtWidgets.QWidget):
         mm_x = self.width() - mm_size - mm_margin
         mm_y = mm_margin
 
-        # --- MÓDOSÍTOTT RÉSZ (Átlátszóság beállítása) ---
-        # 1. Minimap háttere: a 200-as értéket levesszük 100-ra (sokkal átlátszóbb lesz)
+        # --- Átlátszóság beállítása ---
+        # 1. Minimap háttere: a 100-as értéket sokkal átlátszóbb lesz
         painter.fillRect(QtCore.QRectF(mm_x, mm_y, mm_size, mm_size), QtGui.QColor(30, 30, 30, 100))
 
         # A keretnek is adhatunk egy kis átlátszóságot (150)
@@ -216,6 +227,206 @@ class Canvas(QtWidgets.QWidget):
         painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
         painter.drawRect(QtCore.QRectF(vx, vy, vw, vh))
 
+#IDE
+class NewAlgorithmDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Új Algoritmus Létrehozása")
+        self.resize(350, 150)
+
+        layout = QtWidgets.QFormLayout(self)
+
+        self.file_name_input = QtWidgets.QLineEdit()
+        self.file_name_input.setPlaceholderText("pl. uj_vonal.py")
+
+        self.algo_name_input = QtWidgets.QLineEdit()
+        self.algo_name_input.setPlaceholderText("pl. 3. Vonal (Saját)")
+
+        self.algo_type_combo = QtWidgets.QComboBox()
+        self.algo_type_combo.addItems(["2D", "3D"])
+
+        layout.addRow("Fájlnév (*.py):", self.file_name_input)
+        layout.addRow("Algoritmus Neve (UI):", self.algo_name_input)
+        layout.addRow("Típus:", self.algo_type_combo)
+
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.btn_create = QtWidgets.QPushButton("Létrehozás")
+        self.btn_create.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 5px;")
+        self.btn_create.clicked.connect(self.accept)
+
+        self.btn_cancel = QtWidgets.QPushButton("Mégse")
+        self.btn_cancel.clicked.connect(self.reject)
+
+        btn_layout.addWidget(self.btn_create)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addRow(btn_layout)
+
+    def get_data(self):
+        return (
+            self.file_name_input.text().strip(),
+            self.algo_name_input.text().strip(),
+            self.algo_type_combo.currentText()
+        )
+
+class PythonHighlighter(QtGui.QSyntaxHighlighter):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.highlighting_rules = []
+
+        # 1. Alapvető kulcsszavak és Ciklusok (Kék) - Felismeri a for, in, while, and, or szavakat
+        keyword_format = QtGui.QTextCharFormat()
+        keyword_format.setForeground(QtGui.QColor("#569cd6"))
+        keyword_format.setFontWeight(QtGui.QFont.Weight.Bold)
+        keywords = [
+            "def", "class", "yield", "return", "if", "else", "elif", 
+            "for", "while", "in", "break", "continue", "pass",
+            "and", "or", "not", "is", "import", "from", "True", "False", "None"
+        ]
+        for word in keywords:
+            pattern = QtCore.QRegularExpression(rf"\b{word}\b")
+            self.highlighting_rules.append((pattern, keyword_format))
+
+        # 2. Beépített Python funkciók (Türkiz) - Matematika és típusok
+        builtin_format = QtGui.QTextCharFormat()
+        builtin_format.setForeground(QtGui.QColor("#4EC9B0"))
+        builtins = [
+            "range", "len", "max", "min", "abs", "int", "float", "str", 
+            "round", "print", "enumerate", "zip", "list", "dict", "set", "tuple",
+            "next", "iter", "super"
+        ]
+        for word in builtins:
+            pattern = QtCore.QRegularExpression(rf"\b{word}\b")
+            self.highlighting_rules.append((pattern, builtin_format))
+
+        # 3. Egyedi függvényhívások (Sárga) - Bármi, ami után '(' zárójel van
+        function_format = QtGui.QTextCharFormat()
+        function_format.setForeground(QtGui.QColor("#DCDCAA"))
+        self.highlighting_rules.append((QtCore.QRegularExpression(r"\b[A-Za-z0-9_]+(?=\()"), function_format))
+
+        # 4. 'self' kulcsszó (Dőlt kék)
+        self_format = QtGui.QTextCharFormat()
+        self_format.setForeground(QtGui.QColor("#569cd6"))
+        self_format.setFontItalic(True)
+        self.highlighting_rules.append((QtCore.QRegularExpression(r"\bself\b"), self_format))
+
+        # 5. Szövegek / Stringek (Narancssárga)
+        string_format = QtGui.QTextCharFormat()
+        string_format.setForeground(QtGui.QColor("#ce9178"))
+        self.highlighting_rules.append((QtCore.QRegularExpression("\".*?\""), string_format))
+        self.highlighting_rules.append((QtCore.QRegularExpression("'.*?'"), string_format))
+
+        # 6. Kommentek (Zöld)
+        comment_format = QtGui.QTextCharFormat()
+        comment_format.setForeground(QtGui.QColor("#6A9955"))
+        self.highlighting_rules.append((QtCore.QRegularExpression("#[^\n]*"), comment_format))
+
+        # 7. Számok (Világoszöld)
+        number_format = QtGui.QTextCharFormat()
+        number_format.setForeground(QtGui.QColor("#b5cea8"))
+        self.highlighting_rules.append((QtCore.QRegularExpression(r"\b[0-9]+\b"), number_format))
+
+    def highlightBlock(self, text):
+        for pattern, format in self.highlighting_rules:
+            match_iterator = pattern.globalMatch(text)
+            while match_iterator.hasNext():
+                match = match_iterator.next()
+                self.setFormat(match.capturedStart(), match.capturedLength(), format)
+
+
+class CodeEditorDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Beépített Kódszerkesztő (IDE)")
+        self.resize(900, 650) # Egy picit nagyobbra is vesszük az ablakot
+
+        # Fő elrendezés
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # ==========================================
+        # 1. FELSŐ SÁV (Toolbar: Bal felül)
+        # ==========================================
+        top_layout = QtWidgets.QHBoxLayout()
+        
+        # Fájlválasztó
+        top_layout.addWidget(QtWidgets.QLabel("Megnyitott fájl:"))
+        self.file_combo = QtWidgets.QComboBox()
+        self.file_combo.setMinimumWidth(200)
+        self.load_file_list()
+        self.file_combo.currentTextChanged.connect(self.load_file_content)
+        top_layout.addWidget(self.file_combo)
+
+        # Gyorsmentés gomb (Bal felül, a fájlválasztó mellett)
+        self.btn_save = QtWidgets.QPushButton("💾 Mentés")
+        self.btn_save.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; padding: 5px 15px; border-radius: 3px;")
+        self.btn_save.setToolTip("Fájl mentése anélkül, hogy kilépnél. (Gyorsgomb: Ctrl+S)")
+        self.btn_save.clicked.connect(self.save_file)
+        
+        # Gyorsgomb (Ctrl+S) hozzárendelése az ablakhoz
+        self.shortcut_save = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self)
+        self.shortcut_save.activated.connect(self.save_file)
+
+        top_layout.addWidget(self.btn_save)
+        
+        # Üres hely, ami mindent balra tol
+        top_layout.addStretch()
+        
+        # Bezárás gomb a jobb felső sarokban (opcionális, de kényelmes)
+        self.btn_close = QtWidgets.QPushButton("Bezárás")
+        self.btn_close.setStyleSheet("padding: 5px 15px;")
+        self.btn_close.clicked.connect(self.accept)
+        top_layout.addWidget(self.btn_close)
+
+        # Felső sáv hozzáadása a főablakhoz
+        layout.addLayout(top_layout)
+
+        # ==========================================
+        # 2. SZÖVEGSZERKESZTŐ
+        # ==========================================
+        self.editor = QtWidgets.QPlainTextEdit()
+        font = QtGui.QFont("Courier New", 11)
+        self.editor.setFont(font)
+        self.editor.setTabStopDistance(QtGui.QFontMetricsF(font).horizontalAdvance(' ') * 4)
+        self.editor.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; border: 1px solid #333;")
+        
+        # Színező (Highlighter) rákötése
+        self.highlighter = PythonHighlighter(self.editor.document())
+        
+        layout.addWidget(self.editor)
+
+        # Betöltjük az első fájlt, ha van
+        if self.file_combo.count() > 0:
+            self.load_file_content(self.file_combo.currentText())
+
+    def load_file_list(self):
+        self.file_combo.clear()
+        if os.path.exists("plugins"):
+            for f in os.listdir("plugins"):
+                if f.endswith(".py") and f != "__init__.py":
+                    self.file_combo.addItem(f)
+
+    def load_file_content(self, filename):
+        if not filename: return
+        filepath = os.path.join("plugins", filename)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                self.editor.setPlainText(f.read())
+        except Exception as e:
+            self.editor.setPlainText(f"# Hiba a betöltéskor: {e}")
+
+    def save_file(self):
+        filename = self.file_combo.currentText()
+        if not filename: return
+        filepath = os.path.join("plugins", filename)
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(self.editor.toPlainText())
+            
+            # Kicsi, nem tolakodó üzenet az állapotsor helyett
+            QtWidgets.QMessageBox.information(self, "Siker", f"A {filename} sikeresen mentve!\nFolytathatod a szerkesztést.")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Hiba", f"Nem sikerült menteni:\n{e}")
+            
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -345,7 +556,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # 4. DOBOZ: Műveletek (Súgókkal és Gyorsgombokkal)
         group_actions = QtWidgets.QGroupBox("4. Műveletek")
 
-        # --- ÚJ: QGridLayout a táblázatos (2 oszlopos) elrendezéshez ---
+        # --- QGridLayout a táblázatos (2 oszlopos) elrendezéshez ---
         layout_actions = QtWidgets.QGridLayout()
         layout_actions.setSpacing(5)  # Egy kis térköz a gombok közé
 
@@ -386,12 +597,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_save.clicked.connect(self.save_image)
         layout_actions.addWidget(self.btn_save, 2, 0)  # Sor 2, Oszlop 0
 
-        # --- ÚJ: Kamera visszaállító gomb ---
+        # --- Kamera visszaállító gomb ---
         self.btn_reset_cam = QtWidgets.QPushButton("Kamera alaphelyzetbe")
         self.btn_reset_cam.setStyleSheet("background-color: #607D8B; color: white; padding: 8px;")
         self.btn_reset_cam.setToolTip("Visszaállítja a rácsot középre, alapértelmezett nagyítással.")
         self.btn_reset_cam.clicked.connect(self.reset_camera)
         layout_actions.addWidget(self.btn_reset_cam, 2, 1)
+
+        # --- ÚJ: Algoritmus Létrehozása Gomb ---
+        self.btn_new_algo = QtWidgets.QPushButton("Új Algoritmus (+)")
+        self.btn_new_algo.setStyleSheet("background-color: #00BCD4; color: white; padding: 8px; font-weight: bold;")
+        self.btn_new_algo.setToolTip("Létrehoz egy új üres algoritmus sablont.")
+        self.btn_new_algo.clicked.connect(self.create_new_algorithm)
+        layout_actions.addWidget(self.btn_new_algo, 3, 0)
+
+        # --- MÓDOSÍTOTT: IDE Gomb ---
+        self.btn_ide = QtWidgets.QPushButton("Szerkesztő (IDE)")
+        self.btn_ide.setStyleSheet("background-color: #FF9800; color: white; padding: 8px; font-weight: bold;")
+        self.btn_ide.setToolTip("Beépített kódszerkesztő a pluginok módosításához.")
+        self.btn_ide.clicked.connect(self.open_ide)
+        layout_actions.addWidget(self.btn_ide, 3, 1)
+
 
         group_actions.setLayout(layout_actions)
         sidebar.addWidget(group_actions)
@@ -405,7 +631,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label = QtWidgets.QLabel("Egér pozíció: -")
         self.status_label.setStyleSheet("color: gray; font-style: italic;")
 
-        # --- ÚJ: Lefoglalunk 150 pixel fix helyet a pozíciónak ---
+        # --- Lefoglalunk 150 pixel fix helyet a pozíciónak ---
         self.status_label.setMinimumWidth(150)
         status_layout.addWidget(self.status_label)
 
@@ -568,7 +794,57 @@ class MainWindow(QtWidgets.QMainWindow):
             self.endX.setValue(x);
             self.endY.setValue(y)
 
+    def open_ide(self):
+        ide = CodeEditorDialog(self)
+        ide.exec()
+        self.load_plugins()
+
+    def create_new_algorithm(self):
+            dialog = NewAlgorithmDialog(self)
+            if dialog.exec():  # Ha a Létrehozás gombra kattintottak
+                filename, algoname, algotype = dialog.get_data()
+
+                # 1. Ellenőrzések
+                if not filename or not algoname:
+                    QtWidgets.QMessageBox.warning(self, "Hiba", "Minden mezőt ki kell tölteni!")
+                    return
+
+                if not filename.endswith(".py"):
+                    filename += ".py"
+
+                filepath = os.path.join("plugins", filename)
+                if os.path.exists(filepath):
+                    QtWidgets.QMessageBox.warning(self, "Hiba", "Ez a fájlnév már létezik!")
+                    return
+
+                # 2. A Sablon (Template) generálása
+                template = (
+                    f'NEV = "{algoname}"\n'
+                    f'TIPUS = "{algotype}"\n'
+                    f'LEIRAS = "Saját {algotype} algoritmus leírása.\\nItt módosíthatod, hogy mit csináljon."\n\n'
+                    f'def futtat(res_x, res_y, p1, p2):\n'
+                    f'    x1, y1 = p1\n'
+                    f'    x2, y2 = p2\n'
+                    f'    \n'
+                    f'    # --- ALGORITMUS LOGIKÁJA IDE JÖN ---\n'
+                    f'    \n'
+                    f'    yield (x1, y1, (255, 255, 0)) # Sárga pont\n'
+                    f'    yield (x2, y2, (255, 100, 0)) # Narancs pont\n'
+                )
+                # 3. Fájl mentése és memóriába töltése
+                try:
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(template)
+
+                    self.load_plugins()  # Újratöltjük a listát
+                    QtWidgets.QMessageBox.information(self, "Siker",
+                                                      "Algoritmus sikeresen létrehozva!\nMost megnyithatod a Szerkesztőben (IDE).")
+                except Exception as e:
+                    QtWidgets.QMessageBox.critical(self, "Hiba", f"Nem sikerült létrehozni a fájlt:\n{e}")
+
+
     def load_plugins(self):
+        self.all_plugins.clear()
         if not os.path.exists("plugins"): os.mkdir("plugins")
         for f in os.listdir("plugins"):
             if f.endswith(".py") and f != "__init__.py":
